@@ -63,41 +63,28 @@ function getPriorityColor(priority) {
   }
 }
 
-function TranscriptionDisplay({ detectedTasks }) {
-  if (!Array.isArray(detectedTasks)) {
+function TranscriptionDisplay({ transcription }) {
+  if (!Array.isArray(transcription)) {
     return (
       <Container>
-        <h3>Detected Tasks from Transcription</h3>
-        <p>No tasks to display (data not available).</p>
+        <h3>Transcription</h3>
+        <p>No transcription data available.</p>
       </Container>
     );
   }
 
   return (
     <Container>
-      <h3>Detected Tasks from Transcription</h3>
-      {detectedTasks.length === 0 ? (
-        <p>No tasks detected.</p>
+      <h3>Transcription</h3>
+      {transcription.length === 0 ? (
+        <p>No transcription available.</p>
       ) : (
         <TaskList>
-          {detectedTasks.map((taskItem, index) => (
-            <TaskItem key={index} priority={taskItem.priority}>
+          {transcription.map((line, index) => (
+            <TaskItem key={index}>
               <TaskDetails>
-                <TaskText>
-                  <strong>{taskItem.task || 'Untitled Task'}</strong>
-                </TaskText>
-                <TaskMeta>
-                  Assignee: {taskItem.assignee || 'Unassigned'}
-                  <br />
-                  Due Date:{' '}
-                  {taskItem.due_date
-                    ? new Date(taskItem.due_date).toLocaleDateString()
-                    : 'N/A'}
-                </TaskMeta>
+                <TaskText>{line}</TaskText>
               </TaskDetails>
-              <PriorityTag priority={taskItem.priority}>
-                {taskItem.priority || 'No Priority'}
-              </PriorityTag>
             </TaskItem>
           ))}
         </TaskList>

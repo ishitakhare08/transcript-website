@@ -10,7 +10,7 @@ import {
 import UserMenu from "./UserMenu";
 import TranscriptionDisplay from "./TranscriptionDisplay";
 import { fetchTrelloBoards } from "../api/trelloApi";
-
+import axios from "axios";
 const meetings = [
   {
     title: "Weekly Team Meeting",
@@ -41,6 +41,7 @@ const Dashboard = () => {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [boards, setBoards] = useState([]);
   const [error, setError] = useState(null);
+  const [transcription, setTranscription] = useState([]);
   const fileInputRef = useRef(null);
 
   const toggleDarkMode = () => setIsDarkMode(!isDarkMode);
@@ -48,6 +49,24 @@ const Dashboard = () => {
   const handleFileSelect = (e) => {
     setSelectedFile(e.target.files[0]);
     setIsDragging(false);
+    if (e.target.files[0]) {
+      const formData = new FormData();
+      formData.append("file", e.target.files[0]);
+      axios.post("https://backend-meet-n4rm.onrender.com/api/video/upload", formData, {
+        headers: {
+          "Content-Type": "multipart/form-data",
+        },
+      })
+      .then(response => {
+        console.log("File uploaded successfully:", response.data);
+
+        setTranscription([response.data.transcription] || []);
+      })
+      .catch(error => {
+        console.error("Error uploading file:", error);
+        setError("Failed to upload file. Please try again.");
+      });
+    }
   };
 
   const handleDrop = (e) => {
@@ -136,7 +155,7 @@ const Dashboard = () => {
       case "transcript":
         return (
           <div className="p-6 bg-white dark:bg-gray-800 rounded-lg shadow text-gray-900 dark:text-gray-100">
-            <TranscriptionDisplay />
+            <TranscriptionDisplay  transcription={transcription} />
           </div>
         );
       case "summary":
