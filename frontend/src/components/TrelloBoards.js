@@ -10,9 +10,9 @@ const TrelloBoards = () => {
             try {
                 const data = await fetchTrelloBoards();
                 setBoards(data);
-            } catch (err) {
+            } catch (error) {
                 setError('Failed to load Trello boards. Please check your API key and token.');
-                console.error(err);
+                console.error(error);
             }
         };
 

@@ -28,9 +28,9 @@ function TaskFetcher() {
 
                 const data = await response.json();
                 setDetectedTasks(data.tasks || []); // Ensure reading the tasks variable
-            } catch (err) {
-                setError(`Failed to fetch detected tasks: ${err}`);
-                console.error("Error fetching detected tasks:", err);
+            } catch (error) {
+                setError(`Failed to fetch detected tasks: ${error}`);
+                console.error("Error fetching detected tasks:", error);
             } finally {
                 setLoading(false);
             }

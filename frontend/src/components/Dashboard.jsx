@@ -8,8 +8,8 @@ import {
   ListTodo,
 } from "lucide-react";
 import UserMenu from "./UserMenu";
-import TranscriptionDisplay from "./TranscriptionDisplay";
-import { fetchTrelloBoards } from "../api/trelloApi";
+import TranscriptionDisplay from "./TranscriptionDisplay"; // This component is imported but not used in the provided snippet
+import { fetchTrelloBoards } from "../api/trelloApi"; // Assuming this is for the Trello tab
 
 const Dashboard = () => {
   const [activeTab, setActiveTab] = useState("upload");
@@ -26,68 +26,74 @@ const Dashboard = () => {
 
   const toggleDarkMode = () => setIsDarkMode(!isDarkMode);
 
-  const handleFileSelect = (e) => {
-    setSelectedFile(e.target.files[0]);
-    setIsDragging(false);
-  };
-
-  const handleDrop = (e) => {
-    e.preventDefault();
-    setIsDragging(false);
-    const file = e.dataTransfer.files[0];
-    if (file) setSelectedFile(file);
-  };
-
-  const handleDragOver = (e) => {
-    e.preventDefault();
-    setIsDragging(true);
-  };
-
-  const handleDragLeave = () => {
-    setIsDragging(false);
-  };
-
-  // Handle file upload and processing
   const handleFileUpload = async () => {
-    if (!selectedFile) return;
-    
-    setIsProcessing(true);
-    try {
-      // Here you would implement your actual transcription API call
-      // For now, I'll simulate the process
-      console.log("Processing file:", selectedFile.name);
-      
-      // Simulate transcription process
-      setTimeout(() => {
-        const mockTranscription = {
-          text: "This is a sample transcription of your uploaded media file...",
-          timestamp: new Date().toISOString(),
-          fileName: selectedFile.name,
-          duration: "Unknown"
-        };
-        
-        setTranscriptionData(mockTranscription);
-        setActiveTab("transcript"); // Auto-switch to transcript tab
-        setIsProcessing(false);
-      }, 2000);
-      
-    } catch (error) {
-      console.error("Failed to process file:", error);
-      setError("Failed to process the uploaded file.");
-      setIsProcessing(false);
-    }
-  };
+  console.log("handleFileUpload started."); // ADD THIS LINE
 
-  // Generate summary from transcription
+  if (!selectedFile) {
+    console.log("No file selected, returning early."); // ADD THIS LINE
+    setError("Please select a file to upload.");
+    return;
+  }
+
+  console.log("File selected:", selectedFile.name); // ADD THIS LINE
+  setIsProcessing(true);
+  setError(null); // Clear previous errors
+
+  const formData = new FormData();
+  formData.append("file", selectedFile);
+
+  try {
+    console.log("Attempting to fetch API."); // ADD THIS LINE
+    const response = await fetch("http://127.0.0.1:5000/api/forward-upload", {
+      method: "POST",
+      body: formData,
+    });
+    console.log("Fetch call completed."); // ADD THIS LINE
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+    }
+
+    const result = await response.json();
+    console.log("File upload successful:", result);
+    if (result.response && result.response.transcription) {
+      const mockTranscription = {
+        text: result.response.transcription.text,
+        timestamp: new Date().toISOString(),
+        fileName: selectedFile.name,
+        duration: result.response.transcription.duration || "Unknown",
+      };
+      setTranscriptionData(mockTranscription);
+      setActiveTab("transcript");
+    } else {
+      console.warn("Backend did not return full transcription data, using mock data.");
+      const mockTranscription = {
+        text: `Transcription for ${selectedFile.name} will appear here.`,
+        timestamp: new Date().toISOString(),
+        fileName: selectedFile.name,
+        duration: "Unknown",
+      };
+      setTranscriptionData(mockTranscription);
+      setActiveTab("transcript");
+    }
+
+  } catch (error) {
+    console.error("Failed to process file (caught error):", error); // MODIFIED THIS LINE
+    setError(`Failed to upload file or get transcription: ${error.message}`);
+  } finally {
+    setIsProcessing(false);
+    console.log("handleFileUpload finished."); // ADD THIS LINE
+  }
+};
+
+
   const generateSummary = async () => {
     if (!transcriptionData) return;
-    
+
     setIsProcessing(true);
     try {
-      // Here you would implement your actual summary generation API call
-      // For now, I'll simulate the process
       console.log("Generating summary from transcription...");
-      
       setTimeout(() => {
         const mockSummary = {
           title: `Meeting Summary - ${new Date().toLocaleDateString()}`,
@@ -95,31 +101,30 @@ const Dashboard = () => {
             "Main discussion points covered",
             "Important decisions made",
             "Action items identified",
-            "Next steps outlined"
+            "Next steps outlined",
           ],
           participants: "Multiple participants",
           duration: transcriptionData.duration,
           date: new Date().toLocaleDateString(),
-          fullSummary: "This is a comprehensive summary of the meeting based on the transcription. Key topics discussed include project updates, timeline adjustments, and resource allocation decisions."
+          fullSummary:
+            "This is a comprehensive summary of the meeting based on the transcription. Key topics discussed include project updates, timeline adjustments, and resource allocation decisions.",
         };
-        
+
         setSummaryData(mockSummary);
-        
-        // Add to past meetings
+
         const newMeeting = {
           id: Date.now(),
           title: mockSummary.title,
           date: mockSummary.date,
           duration: mockSummary.duration,
           transcription: transcriptionData,
-          summary: mockSummary
+          summary: mockSummary,
         };
-        
-        setPastMeetings(prev => [newMeeting, ...prev]);
-        setActiveTab("summary"); // Auto-switch to summary tab
+
+        setPastMeetings((prev) => [newMeeting, ...prev]);
+        setActiveTab("summary");
         setIsProcessing(false);
       }, 1500);
-      
     } catch (error) {
       console.error("Failed to generate summary:", error);
       setError("Failed to generate summary.");
@@ -127,7 +132,6 @@ const Dashboard = () => {
     }
   };
 
-  // Fetch Trello boards for the "Trello Tasks" tab
   useEffect(() => {
     const fetchTrelloLists = async () => {
       try {
@@ -227,7 +231,8 @@ const Dashboard = () => {
               <div className="space-y-4">
                 <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
                   <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
-                    File: {transcriptionData.fileName} | Processed: {new Date(transcriptionData.timestamp).toLocaleString()}
+                    File: {transcriptionData.fileName} | Processed:{" "}
+                    {new Date(transcriptionData.timestamp).toLocaleString()}
                   </p>
                   <div className="prose dark:prose-invert max-w-none">
                     <p className="whitespace-pre-wrap">{transcriptionData.text}</p>
@@ -256,7 +261,7 @@ const Dashboard = () => {
                     Date: {summaryData.date} | Duration: {summaryData.duration}
                   </p>
                 </div>
-                
+
                 <div>
                   <h4 className="font-medium mb-3">Key Points:</h4>
                   <ul className="list-disc pl-5 space-y-1">
@@ -267,7 +272,7 @@ const Dashboard = () => {
                     ))}
                   </ul>
                 </div>
-                
+
                 <div>
                   <h4 className="font-medium mb-3">Full Summary:</h4>
                   <p className="text-gray-700 dark:text-gray-300 leading-relaxed">
@@ -312,7 +317,7 @@ const Dashboard = () => {
                       {meeting.date} • {meeting.duration}
                     </p>
                     <div className="flex gap-2 mb-3">
-                      <button 
+                      <button
                         onClick={() => {
                           setTranscriptionData(meeting.transcription);
                           setActiveTab("transcript");
@@ -321,7 +326,7 @@ const Dashboard = () => {
                       >
                         View Transcript
                       </button>
-                      <button 
+                      <button
                         onClick={() => {
                           setSummaryData(meeting.summary);
                           setActiveTab("summary");
@@ -356,12 +361,7 @@ const Dashboard = () => {
               <ul className="space-y-2">
                 {boards.map((board) => (
                   <li key={board.id} className="p-4 bg-gray-100 dark:bg-gray-700 rounded shadow">
-                    <a
-                      href={board.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-600 hover:underline"
-                    >
+                    <a href={board.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
                       {board.name}
                     </a>
                   </li>
