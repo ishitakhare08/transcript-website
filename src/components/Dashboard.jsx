@@ -73,7 +73,7 @@ const handleFileUpload = async () => {
 
       console.log("Uploading file:", selectedFile.name);
 
-      const response = await fetch(`${BACKEND_URL}/api/forward-upload`, {
+      const response = await fetch("https://backend-meet-n4rm.onrender.com/api/video/upload", {
         method: "POST",
         body: formData,
       });
@@ -118,49 +118,88 @@ const handleFileUpload = async () => {
 
   // Generate summary from transcription
   const generateSummary = async () => {
-    if (!transcriptionData) return;
+    console.log("generateSummary function called");
+    console.log("transcriptionData:", transcriptionData);
     
+    if (!transcriptionData) {
+      console.log("No transcription data, returning early");
+      return;
+    }
+    
+    console.log("Setting processing to true");
     setIsProcessing(true);
+    setError(null); // Clear any previous errors
+    
     try {
-      // Here you would implement your actual summary generation API call
-      // For now, I'll simulate the process
       console.log("Generating summary from transcription...");
+      console.log("Transcription text:", transcriptionData.text);
       
-      setTimeout(() => {
-        const mockSummary = {
-          title:` Meeting Summary - ${new Date().toLocaleDateString()}`,
-          keyPoints: [
-            "Main discussion points covered",
-            "Important decisions made",
-            "Action items identified",
-            "Next steps outlined"
-          ],
-          participants: "Multiple participants",
-          duration: transcriptionData.duration,
-          date: new Date().toLocaleDateString(),
-          fullSummary: "This is a comprehensive summary of the meeting based on the transcription. Key topics discussed include project updates, timeline adjustments, and resource allocation decisions."
-        };
-        
-        setSummaryData(mockSummary);
-        
-        // Add to past meetings
-        const newMeeting = {
-          id: Date.now(),
-          title: mockSummary.title,
-          date: mockSummary.date,
-          duration: mockSummary.duration,
-          transcription: transcriptionData,
-          summary: mockSummary
-        };
-        
-        setPastMeetings(prev => [newMeeting, ...prev]);
-        setActiveTab("summary"); // Auto-switch to summary tab
-        setIsProcessing(false);
-      }, 1500);
+      console.log("About to make API call to summarization service");
+      
+      // Make API call to summarization service
+      const response = await axios.post(
+        "https://summarization-s3g3.onrender.com/summarize",
+        {
+          text: transcriptionData.text
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+      
+      console.log("Summarization API Response:", response);
+      
+      // Process the API response
+      const apiSummary = response.data;
+
+      
+      const summary = {
+        title: `Meeting Summary - ${new Date().toLocaleDateString()}`,
+        keyPoints: apiSummary.key_points || apiSummary.keyPoints || [
+          "Summary generated from transcription",
+          "Key insights extracted",
+          "Important points identified"
+        ],
+        participants: "Multiple participants",
+        duration: transcriptionData.duration,
+        date: new Date().toLocaleDateString(),
+        fullSummary: apiSummary.summary || apiSummary.text || "Summary could not be generated from the transcription."
+      };
+      
+      setSummaryData(summary);
+      
+      // Add to past meetings
+      const newMeeting = {
+        id: Date.now(),
+        title: summary.title,
+        date: summary.date,
+        duration: summary.duration,
+        transcription: transcriptionData,
+        summary: summary
+      };
+      
+      setPastMeetings(prev => [newMeeting, ...prev]);
+      setActiveTab("summary"); // Auto-switch to summary tab
       
     } catch (error) {
       console.error("Failed to generate summary:", error);
-      setError("Failed to generate summary.");
+      
+      let errorMessage = "Failed to generate summary.";
+      if (error.response) {
+        // Server responded with error status
+        errorMessage = `Summary API error: ${error.response.data?.message || error.response.status}`;
+      } else if (error.request) {
+        // Request was made but no response received
+        errorMessage = "No response from summary service. Please check your internet connection.";
+      } else {
+        // Something else happened
+        errorMessage = `Summary generation failed: ${error.message}`;
+      }
+      
+      setError(errorMessage);
+    } finally {
       setIsProcessing(false);
     }
   };
@@ -253,7 +292,11 @@ const handleFileUpload = async () => {
               <h2 className="text-lg font-semibold">Transcription</h2>
               {transcriptionData && (
                 <button
-                  onClick={generateSummary}
+                  onClick={(e) => {
+                    console.log("Generate Summary button clicked");
+                    console.log("Event:", e);
+                    generateSummary();
+                  }}
                   disabled={isProcessing}
                   className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition disabled:opacity-50"
                 >
@@ -321,7 +364,11 @@ const handleFileUpload = async () => {
                 </p>
                 {transcriptionData && (
                   <button
-                    onClick={generateSummary}
+                    onClick={(e) => {
+                      console.log("Generate Summary button clicked (summary tab)");
+                      console.log("Event:", e);
+                      generateSummary();
+                    }}
                     disabled={isProcessing}
                     className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition disabled:opacity-50"
                   >
