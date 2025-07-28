@@ -9,7 +9,8 @@ import {
 } from "lucide-react";
 import UserMenu from "./UserMenu";
 import TranscriptionDisplay from "./TranscriptionDisplay";
-import { fetchTrelloBoards } from "../api/trelloApi";
+// CORRECTED: Using the correct function names from your trelloApi file
+import { fetchTrelloBoards, fetchBoardLists, addTaskToTrello } from "../api/trelloApi"; 
 import axios from "axios";
 
 const Dashboard = () => {
@@ -18,11 +19,16 @@ const Dashboard = () => {
   const [isDragging, setIsDragging] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [boards, setBoards] = useState([]);
+  const [lists, setLists] = useState([]);
+  const [selectedBoard, setSelectedBoard] = useState("");
+  const [selectedList, setSelectedList] = useState("");
   const [error, setError] = useState(null);
   const [transcriptionData, setTranscriptionData] = useState(null);
   const [summaryData, setSummaryData] = useState(null);
+  const [keywords, setKeywords] = useState([]);
   const [pastMeetings, setPastMeetings] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isTrelloModalOpen, setIsTrelloModalOpen] = useState(false);
   const fileInputRef = useRef(null);
 
   const toggleDarkMode = () => setIsDarkMode(!isDarkMode);
@@ -48,43 +54,24 @@ const Dashboard = () => {
     setIsDragging(false);
   };
 
-  // Handle file upload and processing
   const handleFileUpload = async () => {
-    console.log("handleFileUpload called");
-    console.log("Selected file:", selectedFile);
-    
     if (!selectedFile) {
-      console.log("No file selected, returning");
       setError("Please select a file first");
       return;
     }
     
-    console.log("Setting processing to true");
     setIsProcessing(true);
-    setError(null); // Clear any previous errors
+    setError(null);
     
     try {
-      console.log("Processing file:", selectedFile.name);
-      console.log("File type:", selectedFile.type);
-      console.log("File size:", selectedFile.size);
-      
       const formData = new FormData();
       formData.append("file", selectedFile);
       
-      console.log("FormData created, making API call...");
-      
-      // Make the actual API call
       const result = await axios.post(
         "https://backend-meet-n4rm.onrender.com/api/video/upload",
         formData,
-        {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
-        }
+        { headers: { 'Content-Type': 'multipart/form-data' } }
       );
-      
-      console.log("API Response:", result.data);
       
       const transcription = {
         text: result.data.transcription || "No transcription available",
@@ -94,76 +81,41 @@ const Dashboard = () => {
       };
       
       setTranscriptionData(transcription);
-      setActiveTab("transcript"); // Auto-switch to transcript tab
-      setIsProcessing(false);
+      setActiveTab("transcript");
       
     } catch (error) {
-      console.error("Failed to process file:", error);
-      console.error("Error details:", {
-        message: error.message,
-        response: error.response,
-        request: error.request
-      });
       setError(`Failed to process the uploaded file: ${error.response?.data?.message || error.message}`);
+    } finally {
       setIsProcessing(false);
     }
   };
 
-  // Generate summary from transcription
   const generateSummary = async () => {
-    console.log("generateSummary function called");
-    console.log("transcriptionData:", transcriptionData);
+    if (!transcriptionData) return;
     
-    if (!transcriptionData) {
-      console.log("No transcription data, returning early");
-      return;
-    }
-    
-    console.log("Setting processing to true");
     setIsProcessing(true);
-    setError(null); // Clear any previous errors
+    setError(null);
     
     try {
-      console.log("Generating summary from transcription...");
-      console.log("Transcription text:", transcriptionData.text);
-      
-      console.log("About to make API call to summarization service");
-      
-      // Make API call to summarization service
       const response = await axios.post(
         "https://summarization-s3g3.onrender.com/summarize",
-        {
-          text: transcriptionData.text
-        },
-        {
-          headers: {
-            'Content-Type': 'application/json',
-          },
-         
-        }
+        { text: transcriptionData.text },
+        { headers: { 'Content-Type': 'application/json' } }
       );
       
-      console.log("Summarization API Response:", response.data);
-      
-      // Process the API response
       const apiSummary = response.data;
       
       const summary = {
         title: `Meeting Summary - ${new Date().toLocaleDateString()}`,
-        keyPoints: apiSummary.key_points || apiSummary.keyPoints || [
-          "Summary generated from transcription",
-          "Key insights extracted",
-          "Important points identified"
-        ],
+        keyPoints: apiSummary.key_points || [],
         participants: "Multiple participants",
         duration: transcriptionData.duration,
         date: new Date().toLocaleDateString(),
-        fullSummary: apiSummary.summary || apiSummary.text || "Summary could not be generated from the transcription."
+        fullSummary: apiSummary.summary || "Summary could not be generated."
       };
       
       setSummaryData(summary);
       
-      // Add to past meetings
       const newMeeting = {
         id: Date.now(),
         title: summary.title,
@@ -174,49 +126,102 @@ const Dashboard = () => {
       };
       
       setPastMeetings(prev => [newMeeting, ...prev]);
-      setActiveTab("summary"); // Auto-switch to summary tab
+      setActiveTab("summary");
       
     } catch (error) {
-      console.error("Failed to generate summary:", error);
-      console.error("Error response:", error.response?.data);
-      console.error("Error status:", error.response?.status);
-      
-      let errorMessage = "Failed to generate summary.";
-      if (error.response) {
-        // Server responded with error status
-        const serverError = error.response.data?.error || error.response.data?.message || `HTTP ${error.response.status}`;
-        errorMessage = `Summary API error (${error.response.status}): ${serverError}`;
-        console.error("Server error details:", error.response.data);
-      } else if (error.request) {
-        // Request was made but no response received
-        errorMessage = "No response from summary service. Please check your internet connection.";
-      } else {
-        // Something else happened
-        errorMessage = `Summary generation failed: ${error.message}`;
-      }
-      
-      setError(errorMessage);
+      setError(`Failed to generate summary: ${error.response?.data?.error || error.message}`);
     } finally {
       setIsProcessing(false);
     }
   };
 
-  // Fetch Trello boards for the "Trello Tasks" tab
+  const handleExtractKeywordsAndOpenModal = () => {
+    if (!summaryData?.fullSummary) return;
+
+    const commonWords = new Set(['a', 'an', 'the', 'is', 'in', 'it', 'of', 'for', 'on', 'with', 'to', 'from', 'and', 'or', 'we', 'our', 'you', 'your', 'he', 'she', 'they', 'them']);
+    const text = summaryData.fullSummary.toLowerCase().replace(/[^\w\s]/g, "");
+    const words = text.split(/\s+/);
+    const wordFrequency = words.reduce((acc, word) => {
+      if (!commonWords.has(word) && word.length > 3) {
+        acc[word] = (acc[word] || 0) + 1;
+      }
+      return acc;
+    }, {});
+    
+    const sortedKeywords = Object.keys(wordFrequency)
+      .sort((a, b) => wordFrequency[b] - wordFrequency[a])
+      .slice(0, 10);
+      
+    setKeywords(sortedKeywords);
+    setIsTrelloModalOpen(true);
+  };
+
+  const handleCreateTrelloCard = async () => {
+    if (!selectedList || !summaryData) {
+      setError("Please select a Trello list and ensure a summary exists.");
+      return;
+    }
+
+    setIsProcessing(true);
+    setError(null);
+    try {
+      const cardData = {
+        name: summaryData.title,
+        desc: `**Full Summary:**\n${summaryData.fullSummary}\n\n**Key Points:**\n- ${summaryData.keyPoints.join("\n- ")}\n\n**Keywords:** ${keywords.join(", ")}`,
+        idList: selectedList,
+      };
+
+      // CORRECTED: Using the correct function name 'addTaskToTrello'
+      await addTaskToTrello(cardData);
+      alert("Trello card created successfully!");
+      setIsTrelloModalOpen(false);
+      setSelectedBoard("");
+      setSelectedList("");
+      setKeywords([]);
+
+    } catch (error) {
+      console.error("Failed to create Trello card:", error);
+      setError("Failed to create Trello card. Check your API key, token, and permissions.");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   useEffect(() => {
-    const fetchTrelloLists = async () => {
+    const fetchBoards = async () => {
       try {
-        const lists = await fetchTrelloBoards();
-        setBoards(lists);
+        const boardsData = await fetchTrelloBoards();
+        setBoards(boardsData);
       } catch (error) {
         console.error("Failed to fetch Trello boards:", error);
         setError("Failed to fetch Trello boards. Please check your API key and token.");
       }
     };
 
-    if (activeTab === "trello") {
-      fetchTrelloLists();
+    if (activeTab === "trello" || isTrelloModalOpen) {
+      fetchBoards();
     }
-  }, [activeTab]);
+  }, [activeTab, isTrelloModalOpen]);
+
+  useEffect(() => {
+    const fetchListsForBoard = async () => {
+      if (selectedBoard) {
+        try {
+          // CORRECTED: Using the correct function name 'fetchBoardLists'
+          const listsData = await fetchBoardLists(selectedBoard); 
+          setLists(listsData);
+          setSelectedList("");
+        } catch (error) {
+          console.error("Failed to fetch Trello lists:", error);
+          setError("Failed to fetch Trello lists for the selected board.");
+        }
+      } else {
+        setLists([]);
+      }
+    };
+    
+    fetchListsForBoard();
+  }, [selectedBoard]);
 
   const renderTab = () => {
     switch (activeTab) {
@@ -269,7 +274,6 @@ const Dashboard = () => {
                   </p>
                   <button
                     onClick={(e) => {
-                      console.log("Start Transcription button clicked");
                       e.stopPropagation();
                       handleFileUpload();
                     }}
@@ -290,11 +294,7 @@ const Dashboard = () => {
               <h2 className="text-lg font-semibold">Transcription</h2>
               {transcriptionData && (
                 <button
-                  onClick={(e) => {
-                    console.log("Generate Summary button clicked (transcript tab)");
-                    console.log("Event:", e);
-                    generateSummary();
-                  }}
+                  onClick={generateSummary}
                   disabled={isProcessing}
                   className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition disabled:opacity-50"
                 >
@@ -326,7 +326,18 @@ const Dashboard = () => {
       case "summary":
         return (
           <div className="p-6 bg-white dark:bg-gray-800 rounded-lg shadow text-gray-900 dark:text-gray-100">
-            <h2 className="text-lg font-semibold mb-4">Meeting Summary</h2>
+             <div className="flex justify-between items-center mb-4">
+              <h2 className="text-lg font-semibold">Meeting Summary</h2>
+              {summaryData && (
+                  <button
+                    onClick={handleExtractKeywordsAndOpenModal}
+                    disabled={isProcessing}
+                    className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition disabled:opacity-50"
+                  >
+                    Create Trello Card
+                  </button>
+              )}
+            </div>
             {summaryData ? (
               <div className="space-y-6">
                 <div className="border-b dark:border-gray-600 pb-4">
@@ -360,13 +371,9 @@ const Dashboard = () => {
                 <p className="text-gray-500 dark:text-gray-400 mb-4">
                   No summary available. Please transcribe a media file first.
                 </p>
-                {transcriptionData && (
+                {transcriptionData && !summaryData && (
                   <button
-                    onClick={(e) => {
-                      console.log("Generate Summary button clicked (summary tab)");
-                      console.log("Event:", e);
-                      generateSummary();
-                    }}
+                    onClick={generateSummary}
                     disabled={isProcessing}
                     className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition disabled:opacity-50"
                   >
@@ -433,7 +440,7 @@ const Dashboard = () => {
       case "trello":
         return (
           <div className="p-6 bg-white dark:bg-gray-800 rounded-lg shadow text-gray-900 dark:text-gray-100">
-            <h3 className="text-lg font-semibold mb-4">Trello Tasks</h3>
+            <h3 className="text-lg font-semibold mb-4">Trello Boards</h3>
             {error && <p className="text-red-500 mb-4">{error}</p>}
             {boards.length > 0 ? (
               <ul className="space-y-2">
@@ -443,7 +450,7 @@ const Dashboard = () => {
                       href={board.url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-blue-600 hover:underline"
+                      className="text-blue-600 hover:underline font-medium"
                     >
                       {board.name}
                     </a>
@@ -454,7 +461,7 @@ const Dashboard = () => {
               <div className="text-center py-8">
                 <ListTodo className="mx-auto w-12 h-12 text-gray-400 mb-4" />
                 <p className="text-gray-500 dark:text-gray-400">
-                  No Trello boards found. Check your API configuration.
+                  No Trello boards found or an error occurred.
                 </p>
               </div>
             )}
@@ -494,6 +501,73 @@ const Dashboard = () => {
         )}
         <div>{renderTab()}</div>
       </main>
+
+      {isTrelloModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-xl w-full max-w-lg text-gray-800 dark:text-white">
+            <h3 className="text-xl font-semibold mb-4">Create Trello Card</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Extracted Keywords:</label>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {keywords.length > 0 ? keywords.map((kw, index) => (
+                    <span key={index} className="px-3 py-1 bg-blue-100 text-blue-800 text-sm font-medium rounded-full">
+                      {kw}
+                    </span>
+                  )) : <p className="text-sm text-gray-500">No keywords found.</p>}
+                </div>
+              </div>
+              
+              <div>
+                <label htmlFor="trello-board" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Select Board:</label>
+                <select
+                  id="trello-board"
+                  value={selectedBoard}
+                  onChange={(e) => setSelectedBoard(e.target.value)}
+                  className="mt-1 block w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 rounded-md shadow-sm"
+                >
+                  <option value="">-- Select a Board --</option>
+                  {boards.map(board => (
+                    <option key={board.id} value={board.id}>{board.name}</option>
+                  ))}
+                </select>
+              </div>
+              
+              <div>
+                <label htmlFor="trello-list" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Select List:</label>
+                <select
+                  id="trello-list"
+                  value={selectedList}
+                  onChange={(e) => setSelectedList(e.target.value)}
+                  className="mt-1 block w-full p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 rounded-md shadow-sm"
+                  disabled={!selectedBoard || lists.length === 0}
+                >
+                  <option value="">-- Select a List --</option>
+                  {lists.map(list => (
+                    <option key={list.id} value={list.id}>{list.name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            
+            <div className="mt-6 flex justify-end gap-4">
+              <button
+                onClick={() => setIsTrelloModalOpen(false)}
+                className="px-4 py-2 bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreateTrelloCard}
+                disabled={isProcessing || !selectedList}
+                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isProcessing ? "Creating..." : "Create Card"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -501,7 +575,7 @@ const Dashboard = () => {
 const SidebarButton = ({ icon, label, tab, activeTab, setActiveTab }) => (
   <button
     onClick={() => setActiveTab(tab)}
-    className={`w-full flex items-center gap-2 px-3 py-2 rounded-md ${
+    className={`w-full flex items-center gap-2 px-3 py-2 rounded-md transition-colors ${
       activeTab === tab
         ? "bg-blue-100 text-blue-600 font-semibold"
         : "text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
