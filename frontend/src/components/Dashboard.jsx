@@ -6,11 +6,11 @@ import {
   LayoutDashboard,
   History,
   ListTodo,
+  Key,
 } from "lucide-react";
 import UserMenu from "./UserMenu";
 import TranscriptionDisplay from "./TranscriptionDisplay";
-// CORRECTED: Using the correct function names from your trelloApi file
-import { fetchTrelloBoards, fetchBoardLists, addTaskToTrello } from "../api/trelloApi"; 
+import { fetchTrelloBoards, fetchBoardLists, addTaskToTrello, fetchBoardMembers, setTrelloCredentials } from "../api/trelloApi"; 
 import axios from "axios";
 
 const Dashboard = () => {
@@ -18,14 +18,23 @@ const Dashboard = () => {
   const [selectedFile, setSelectedFile] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadController, setUploadController] = useState(null);
   const [boards, setBoards] = useState([]);
   const [lists, setLists] = useState([]);
+  const [boardMembers, setBoardMembers] = useState([]);
   const [selectedBoard, setSelectedBoard] = useState("");
+  const [trelloApiKey, setTrelloApiKey] = useState("");
+  const [trelloToken, setTrelloToken] = useState("");
+  const [trelloCredentialsSet, setTrelloCredentialsSet] = useState(false);
   const [selectedList, setSelectedList] = useState("");
+  const [selectedMembers, setSelectedMembers] = useState([]);
   const [error, setError] = useState(null);
   const [transcriptionData, setTranscriptionData] = useState(null);
   const [summaryData, setSummaryData] = useState(null);
   const [keywords, setKeywords] = useState([]);
+  const [extractedTasks, setExtractedTasks] = useState([]);
+  const [editingTask, setEditingTask] = useState(null);
   const [pastMeetings, setPastMeetings] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isTrelloModalOpen, setIsTrelloModalOpen] = useState(false);
@@ -54,6 +63,16 @@ const Dashboard = () => {
     setIsDragging(false);
   };
 
+  const cancelUpload = () => {
+    if (uploadController) {
+      uploadController.abort();
+      setUploadController(null);
+      setIsProcessing(false);
+      setError("Upload cancelled by user");
+      setUploadProgress(0);
+    }
+  };
+
   const handleFileUpload = async () => {
     if (!selectedFile) {
       setError("Please select a file first");
@@ -62,15 +81,27 @@ const Dashboard = () => {
     
     setIsProcessing(true);
     setError(null);
+    setUploadProgress(0);
+    
+    const controller = new AbortController();
+    setUploadController(controller);
     
     try {
       const formData = new FormData();
       formData.append("file", selectedFile);
       
       const result = await axios.post(
-        "https://backend-meet-n4rm.onrender.com/api/video/upload",
+        "https://backend-meet-102983651606.europe-west1.run.app/api/video/upload",
         formData,
-        { headers: { 'Content-Type': 'multipart/form-data' } }
+        { 
+          headers: { 'Content-Type': 'multipart/form-data' },
+          onUploadProgress: (progressEvent) => {
+            const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            console.log(`Upload Progress: ${percentCompleted}%`);
+            setUploadProgress(percentCompleted);
+          },
+          signal: controller.signal
+        }
       );
       
       const transcription = {
@@ -84,9 +115,14 @@ const Dashboard = () => {
       setActiveTab("transcript");
       
     } catch (error) {
-      setError(`Failed to process the uploaded file: ${error.response?.data?.message || error.message}`);
+      if (axios.isCancel(error)) {
+        console.log('Upload canceled by user');
+      } else {
+        setError(`Failed to process the uploaded file: ${error.response?.data?.message || error.message}`);
+      }
     } finally {
       setIsProcessing(false);
+      setUploadController(null);
     }
   };
 
@@ -103,15 +139,16 @@ const Dashboard = () => {
         { headers: { 'Content-Type': 'application/json' } }
       );
       
-      const apiSummary = response.data;
+      const apiSummary = response.data.summary;
       
       const summary = {
         title: `Meeting Summary - ${new Date().toLocaleDateString()}`,
-        keyPoints: apiSummary.key_points || [],
-        participants: "Multiple participants",
+        keyDiscussionPoints: apiSummary.key_discussion_points || "No key points found.",
+        decisionsMade: apiSummary.decisions_made || "No decisions recorded.",
+        actionItems: apiSummary.action_items || "No action items assigned.",
+        pendingQuestions: apiSummary.pending_questions || "No pending questions noted.",
         duration: transcriptionData.duration,
-        date: new Date().toLocaleDateString(),
-        fullSummary: apiSummary.summary || "Summary could not be generated."
+        date: new Date().toLocaleDateString()
       };
       
       setSummaryData(summary);
@@ -135,11 +172,48 @@ const Dashboard = () => {
     }
   };
 
-  const handleExtractKeywordsAndOpenModal = () => {
-    if (!summaryData?.fullSummary) return;
+  const extractTasks = async () => {
+    if (!summaryData) return;
+    
+    setIsProcessing(true);
+    setError(null);
+    
+    try {
+      const response = await axios.post(
+        "https://summarization-s3g3.onrender.com/task_extractor",
+        { text: summaryData.actionItems },
+        { headers: { 'Content-Type': 'application/json' } }
+      );
+      
+      const tasks = response.data.tasks || [];
+      setExtractedTasks(tasks);
+      
+      // After extracting tasks, continue with keyword extraction
+      extractKeywordsAndOpenModal();
+      
+    } catch (error) {
+      console.error("Failed to extract tasks:", error);
+      setError(`Failed to extract tasks: ${error.response?.data?.error || error.message}`);
+      // Fall back to just keyword extraction if task extraction fails
+      extractKeywordsAndOpenModal();
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+  
+  const extractKeywordsAndOpenModal = () => {
+    if (!summaryData) return;
+
+    // Combine all summary sections for keyword extraction
+    const allText = [
+      summaryData.keyDiscussionPoints,
+      summaryData.decisionsMade,
+      summaryData.actionItems,
+      summaryData.pendingQuestions
+    ].join(' ');
 
     const commonWords = new Set(['a', 'an', 'the', 'is', 'in', 'it', 'of', 'for', 'on', 'with', 'to', 'from', 'and', 'or', 'we', 'our', 'you', 'your', 'he', 'she', 'they', 'them']);
-    const text = summaryData.fullSummary.toLowerCase().replace(/[^\w\s]/g, "");
+    const text = allText.toLowerCase().replace(/[^\w\s]/g, "");
     const words = text.split(/\s+/);
     const wordFrequency = words.reduce((acc, word) => {
       if (!commonWords.has(word) && word.length > 3) {
@@ -161,17 +235,38 @@ const Dashboard = () => {
       setError("Please select a Trello list and ensure a summary exists.");
       return;
     }
+    
+    if (!trelloApiKey || !trelloToken) {
+      setError("Please enter your Trello API key and token first");
+      return;
+    }
 
     setIsProcessing(true);
     setError(null);
     try {
+      // Ensure credentials are set
+      setTrelloCredentials(trelloApiKey, trelloToken);
+      
+      // Format the extracted tasks for Trello
+      let tasksMarkdown = "";
+      if (extractedTasks.length > 0) {
+        tasksMarkdown = "**Tasks:**\n";
+        extractedTasks.forEach(task => {
+          const dueDate = task.due_date !== 'N/A' ? ` (Due: ${task.due_date})` : '';
+          const priority = task.priority !== 'No Priority' ? ` [${task.priority}]` : '';
+          tasksMarkdown += `- ${task.assignee}: ${task.task}${dueDate}${priority}\n`;
+        });
+      } else {
+        // If no tasks were extracted, include a note
+        tasksMarkdown = "No specific tasks were extracted from the meeting.";
+      }
+      
       const cardData = {
         name: summaryData.title,
-        desc: `**Full Summary:**\n${summaryData.fullSummary}\n\n**Key Points:**\n- ${summaryData.keyPoints.join("\n- ")}\n\n**Keywords:** ${keywords.join(", ")}`,
-        idList: selectedList,
+        desc: tasksMarkdown,
+        idList: selectedList
       };
 
-      // CORRECTED: Using the correct function name 'addTaskToTrello'
       await addTaskToTrello(cardData);
       alert("Trello card created successfully!");
       setIsTrelloModalOpen(false);
@@ -189,39 +284,62 @@ const Dashboard = () => {
 
   useEffect(() => {
     const fetchBoards = async () => {
+      if (!trelloApiKey || !trelloToken) {
+        setError("Please enter your Trello API key and token first");
+        return;
+      }
+      
       try {
+        // Set the credentials first
+        setTrelloCredentials(trelloApiKey, trelloToken);
         const boardsData = await fetchTrelloBoards();
         setBoards(boardsData);
+        setTrelloCredentialsSet(true);
       } catch (error) {
         console.error("Failed to fetch Trello boards:", error);
         setError("Failed to fetch Trello boards. Please check your API key and token.");
       }
     };
 
-    if (activeTab === "trello" || isTrelloModalOpen) {
+    if ((activeTab === "trello" || isTrelloModalOpen) && (trelloApiKey && trelloToken)) {
       fetchBoards();
     }
-  }, [activeTab, isTrelloModalOpen]);
+  }, [activeTab, isTrelloModalOpen, trelloApiKey, trelloToken]);
 
   useEffect(() => {
-    const fetchListsForBoard = async () => {
+    const fetchBoardData = async () => {
       if (selectedBoard) {
+        if (!trelloApiKey || !trelloToken) {
+          setError("Please enter your Trello API key and token first");
+          return;
+        }
+        
         try {
-          // CORRECTED: Using the correct function name 'fetchBoardLists'
+          // Ensure credentials are set
+          setTrelloCredentials(trelloApiKey, trelloToken);
+          
+          // Fetch lists for the board
           const listsData = await fetchBoardLists(selectedBoard); 
           setLists(listsData);
+          
+          // Fetch board members
+          const boardMembersData = await fetchBoardMembers(selectedBoard);
+          setBoardMembers(boardMembersData);
+          
           setSelectedList("");
+          setSelectedMembers([]);
         } catch (error) {
-          console.error("Failed to fetch Trello lists:", error);
-          setError("Failed to fetch Trello lists for the selected board.");
+          console.error("Failed to fetch Trello board data:", error);
+          setError("Failed to fetch data for the selected board.");
         }
       } else {
         setLists([]);
+        setBoardMembers([]);
       }
     };
     
-    fetchListsForBoard();
-  }, [selectedBoard]);
+    fetchBoardData();
+  }, [selectedBoard, trelloApiKey, trelloToken]);
 
   const renderTab = () => {
     switch (activeTab) {
@@ -272,16 +390,53 @@ const Dashboard = () => {
                   <p className="text-sm text-gray-600 dark:text-gray-300">
                     Selected: <strong>{selectedFile.name}</strong>
                   </p>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleFileUpload();
-                    }}
-                    disabled={isProcessing}
-                    className="mt-3 px-6 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition disabled:opacity-50"
-                  >
-                    {isProcessing ? "Processing..." : "Start Transcription"}
-                  </button>
+                  
+                  {isProcessing && uploadProgress > 0 && (
+                    <div className="mt-3">
+                      <div className="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700 mb-2">
+                        <div 
+                          className="bg-blue-600 h-2.5 rounded-full" 
+                          style={{ width: `${uploadProgress}%` }}
+                        ></div>
+                      </div>
+                      <p className="text-sm text-gray-600 dark:text-gray-300">
+                        Upload Progress: {uploadProgress}%
+                      </p>
+                    </div>
+                  )}
+                  
+                  <div className="flex space-x-3 mt-3">
+                    {!isProcessing ? (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleFileUpload();
+                        }}
+                        className="px-6 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition"
+                      >
+                        Start Transcription
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            cancelUpload();
+                          }}
+                          className="px-6 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition"
+                        >
+                          Cancel Upload
+                        </button>
+                        <p className="flex items-center text-sm text-gray-600 dark:text-gray-300">
+                          <svg className="animate-spin h-4 w-4 mr-2" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          Processing...
+                        </p>
+                      </>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -309,7 +464,14 @@ const Dashboard = () => {
                     File: {transcriptionData.fileName} | Processed: {new Date(transcriptionData.timestamp).toLocaleString()}
                   </p>
                   <div className="prose dark:prose-invert max-w-none">
-                    <p className="whitespace-pre-wrap">{transcriptionData.text}</p>
+                    <textarea
+                      className="whitespace-pre-wrap w-full h-64 p-3 border rounded bg-gray-50 dark:bg-gray-700"
+                      value={transcriptionData.text}
+                      onChange={(e) => setTranscriptionData({
+                        ...transcriptionData,
+                        text: e.target.value
+                      })}
+                    />
                   </div>
                 </div>
               </div>
@@ -330,11 +492,11 @@ const Dashboard = () => {
               <h2 className="text-lg font-semibold">Meeting Summary</h2>
               {summaryData && (
                   <button
-                    onClick={handleExtractKeywordsAndOpenModal}
+                    onClick={extractTasks}
                     disabled={isProcessing}
                     className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition disabled:opacity-50"
                   >
-                    Create Trello Card
+                    {isProcessing ? "Processing..." : "Extract Tasks & Create Card"}
                   </button>
               )}
             </div>
@@ -348,21 +510,52 @@ const Dashboard = () => {
                 </div>
                 
                 <div>
-                  <h4 className="font-medium mb-3">Key Points:</h4>
-                  <ul className="list-disc pl-5 space-y-1">
-                    {summaryData.keyPoints.map((point, index) => (
-                      <li key={index} className="text-gray-700 dark:text-gray-300">
-                        {point}
-                      </li>
-                    ))}
-                  </ul>
+                  <h4 className="font-medium mb-3">Key Discussion Points:</h4>
+                  <textarea
+                    className="w-full p-3 border rounded bg-gray-50 dark:bg-gray-700 text-gray-700 dark:text-gray-300 min-h-[100px]"
+                    value={summaryData.keyDiscussionPoints}
+                    onChange={(e) => setSummaryData({
+                      ...summaryData,
+                      keyDiscussionPoints: e.target.value
+                    })}
+                  />
                 </div>
                 
                 <div>
-                  <h4 className="font-medium mb-3">Full Summary:</h4>
-                  <p className="text-gray-700 dark:text-gray-300 leading-relaxed">
-                    {summaryData.fullSummary}
-                  </p>
+                  <h4 className="font-medium mb-3">Decisions Made:</h4>
+                  <textarea
+                    className="w-full p-3 border rounded bg-gray-50 dark:bg-gray-700 text-gray-700 dark:text-gray-300 min-h-[100px]"
+                    value={summaryData.decisionsMade}
+                    onChange={(e) => setSummaryData({
+                      ...summaryData,
+                      decisionsMade: e.target.value
+                    })}
+                  />
+                </div>
+                
+                <div>
+                  <h4 className="font-medium mb-3">Action Items:</h4>
+                  <textarea
+                    className="w-full p-3 border rounded bg-gray-50 dark:bg-gray-700 text-gray-700 dark:text-gray-300 min-h-[100px]"
+                    value={summaryData.actionItems}
+                    onChange={(e) => setSummaryData({
+                      ...summaryData,
+                      actionItems: e.target.value
+                    })}
+                    placeholder="Format with '- ' prefix for each action item"
+                  />
+                </div>
+                
+                <div>
+                  <h4 className="font-medium mb-3">Pending Questions or Issues:</h4>
+                  <textarea
+                    className="w-full p-3 border rounded bg-gray-50 dark:bg-gray-700 text-gray-700 dark:text-gray-300 min-h-[100px]"
+                    value={summaryData.pendingQuestions}
+                    onChange={(e) => setSummaryData({
+                      ...summaryData,
+                      pendingQuestions: e.target.value
+                    })}
+                  />
                 </div>
               </div>
             ) : (
@@ -472,6 +665,71 @@ const Dashboard = () => {
     }
   };
 
+  // Function to save Trello credentials
+  const saveTrelloCredentials = () => {
+    if (trelloApiKey && trelloToken) {
+      setTrelloCredentials(trelloApiKey, trelloToken);
+      setTrelloCredentialsSet(true);
+    } else {
+      setError("Both Trello API Key and Token are required");
+    }
+  };
+
+  // Function to render Trello credentials form
+  const renderTrelloCredentialsForm = () => {
+    return (
+      <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow mb-6">
+        <div className="flex items-center gap-2 mb-3">
+          <Key className="text-blue-500" />
+          <h3 className="text-lg font-semibold text-gray-800 dark:text-white">
+            Trello API Credentials
+          </h3>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label htmlFor="trello-api-key" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Trello API Key
+            </label>
+            <input
+              type="text"
+              id="trello-api-key"
+              value={trelloApiKey}
+              onChange={(e) => setTrelloApiKey(e.target.value)}
+              placeholder="Enter your Trello API Key"
+              className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded dark:bg-gray-700 dark:text-white"
+            />
+          </div>
+          <div>
+            <label htmlFor="trello-token" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Trello Token
+            </label>
+            <input
+              type="text"
+              id="trello-token"
+              value={trelloToken}
+              onChange={(e) => setTrelloToken(e.target.value)}
+              placeholder="Enter your Trello Token"
+              className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded dark:bg-gray-700 dark:text-white"
+            />
+          </div>
+        </div>
+        <div className="mt-3">
+          <button
+            onClick={saveTrelloCredentials}
+            className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition"
+          >
+            {trelloCredentialsSet ? "Update Credentials" : "Save Credentials"}
+          </button>
+          {trelloCredentialsSet && (
+            <span className="ml-3 text-sm text-green-600 dark:text-green-400">
+              ✓ Credentials set successfully
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className={`flex min-h-screen ${isDarkMode ? "dark bg-gray-900" : "bg-gray-50"}`}>
       <aside className="w-64 bg-white dark:bg-gray-800 border-r shadow-sm">
@@ -499,14 +757,142 @@ const Dashboard = () => {
             {error}
           </div>
         )}
+        {renderTrelloCredentialsForm()}
         <div>{renderTab()}</div>
       </main>
 
       {isTrelloModalOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-xl w-full max-w-lg text-gray-800 dark:text-white">
+          <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-xl w-full max-w-lg text-gray-800 dark:text-white overflow-y-auto max-h-[90vh]">
             <h3 className="text-xl font-semibold mb-4">Create Trello Card</h3>
             <div className="space-y-4">
+              {/* Tasks Section */}
+              <div>
+                <div className="flex justify-between items-center mb-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Extracted Tasks:</label>
+                  <button
+                    className="text-xs px-2 py-1 bg-green-600 text-white rounded hover:bg-green-700"
+                    onClick={() => {
+                      setExtractedTasks([
+                        ...extractedTasks,
+                        {
+                          assignee: "Unassigned",
+                          task: "New task",
+                          due_date: "N/A",
+                          priority: "No Priority"
+                        }
+                      ]);
+                      // Set to edit the newly added task
+                      setEditingTask(extractedTasks.length);
+                    }}
+                  >
+                    + Add Task
+                  </button>
+                </div>
+                <div className="mt-2 space-y-3 border rounded-md p-3 dark:border-gray-600">
+                  {extractedTasks.map((task, index) => (
+                      <div key={index} className="p-2 border-b last:border-b-0 dark:border-gray-600">
+                        {editingTask === index ? (
+                          // Edit mode
+                          <div className="space-y-2">
+                            <div className="flex justify-between">
+                              <input 
+                                className="p-1 border rounded w-1/2 text-sm dark:bg-gray-700"
+                                value={task.assignee}
+                                onChange={(e) => {
+                                  const updatedTasks = [...extractedTasks];
+                                  updatedTasks[index] = { ...task, assignee: e.target.value };
+                                  setExtractedTasks(updatedTasks);
+                                }}
+                                placeholder="Assignee name"
+                              />
+                              <select
+                                className="p-1 border rounded text-sm dark:bg-gray-700"
+                                value={task.priority}
+                                onChange={(e) => {
+                                  const updatedTasks = [...extractedTasks];
+                                  updatedTasks[index] = { ...task, priority: e.target.value };
+                                  setExtractedTasks(updatedTasks);
+                                }}
+                              >
+                                <option value="No Priority">No Priority</option>
+                                <option value="Low">Low</option>
+                                <option value="Medium">Medium</option>
+                                <option value="High">High</option>
+                              </select>
+                            </div>
+                            <textarea
+                              className="p-2 border rounded w-full text-sm min-h-[60px] dark:bg-gray-700"
+                              value={task.task}
+                              onChange={(e) => {
+                                const updatedTasks = [...extractedTasks];
+                                updatedTasks[index] = { ...task, task: e.target.value };
+                                setExtractedTasks(updatedTasks);
+                              }}
+                              placeholder="Task description"
+                            />
+                            <div className="flex justify-between">
+                              <input
+                                className="p-1 border rounded w-1/2 text-sm dark:bg-gray-700"
+                                value={task.due_date}
+                                onChange={(e) => {
+                                  const updatedTasks = [...extractedTasks];
+                                  updatedTasks[index] = { ...task, due_date: e.target.value };
+                                  setExtractedTasks(updatedTasks);
+                                }}
+                                placeholder="Due date (YYYY-MM-DD or N/A)"
+                              />
+                              <div className="flex space-x-2">
+                                <button
+                                  className="px-2 py-1 bg-green-600 text-white text-xs rounded"
+                                  onClick={() => setEditingTask(null)}
+                                >
+                                  Save
+                                </button>
+                                <button
+                                  className="px-2 py-1 bg-red-600 text-white text-xs rounded"
+                                  onClick={() => {
+                                    // Remove this task
+                                    setExtractedTasks(extractedTasks.filter((_, i) => i !== index));
+                                    setEditingTask(null);
+                                  }}
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          // View mode
+                          <>
+                            <div className="flex justify-between mb-1">
+                              <span className="font-medium">{task.assignee || "Unassigned"}</span>
+                              <span className={`text-xs px-2 py-0.5 rounded-full ${
+                                task.priority === 'High' ? 'bg-red-100 text-red-800' : 
+                                task.priority === 'Medium' ? 'bg-yellow-100 text-yellow-800' : 
+                                'bg-blue-100 text-blue-800'
+                              }`}>
+                                {task.priority}
+                              </span>
+                            </div>
+                            <p className="text-sm">{task.task}</p>
+                            <div className="flex justify-between mt-1">
+                              <span className="text-xs text-gray-500">
+                                {task.due_date !== 'N/A' ? `Due: ${task.due_date}` : 'No due date'}
+                              </span>
+                              <button 
+                                className="text-xs text-blue-600 hover:underline"
+                                onClick={() => setEditingTask(index)}
+                              >
+                                Edit
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Extracted Keywords:</label>
                 <div className="mt-2 flex flex-wrap gap-2">
@@ -548,30 +934,29 @@ const Dashboard = () => {
                   ))}
                 </select>
               </div>
-            </div>
-            
-            <div className="mt-6 flex justify-end gap-4">
-              <button
-                onClick={() => setIsTrelloModalOpen(false)}
-                className="px-4 py-2 bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 transition"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleCreateTrelloCard}
-                disabled={isProcessing || !selectedList}
-                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isProcessing ? "Creating..." : "Create Card"}
-              </button>
+              {/* Move the buttons INSIDE the modal box */}
+              <div className="mt-6  justify-end gap-4">
+                <button
+                  onClick={() => setIsTrelloModalOpen(false)}
+                  className="px-4 py-2 mr-4 bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleCreateTrelloCard}
+                  disabled={isProcessing || !selectedList}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isProcessing ? "Creating..." : "Create Card"}
+                </button>
+              </div>
             </div>
           </div>
         </div>
       )}
     </div>
-  );
-};
-
+  )}
+ 
 const SidebarButton = ({ icon, label, tab, activeTab, setActiveTab }) => (
   <button
     onClick={() => setActiveTab(tab)}
