@@ -665,7 +665,6 @@ const Dashboard = () => {
     }
   };
 
-  // Function to save Trello credentials
   const saveTrelloCredentials = () => {
     if (trelloApiKey && trelloToken) {
       setTrelloCredentials(trelloApiKey, trelloToken);
