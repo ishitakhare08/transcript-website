@@ -188,7 +188,7 @@ const Dashboard = () => {
       const tasks = response.data.tasks || [];
       setExtractedTasks(tasks);
       
-      // After extracting tasks, continue with keyword extraction
+      
       extractKeywordsAndOpenModal();
       
     } catch (error) {
